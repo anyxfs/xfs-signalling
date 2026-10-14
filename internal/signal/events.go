@@ -28,6 +28,7 @@ const (
 	evResumed      = "resumed"       //
 	evResumeFailed = "resume_failed" // detail: error code
 	evTURNIssued   = "turn_issued"   //
+	evTURNLimited  = "turn_limited"  // daily per-address budget spent
 )
 
 const eventRetention = 400 * 24 * time.Hour

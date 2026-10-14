@@ -1,4 +1,5 @@
 {
+  "comment": "本地测试用 / for local testing: the host names here are examples, not the production ones.",
   "geo": "/etc/xfs/geo-country.csv.gz",
   "regions": [
     {

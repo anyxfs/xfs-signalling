@@ -5,6 +5,7 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
+# 本地测试用 / for local testing: stun1.anyxfs.cn below is an example host name.
 User=xfs-signal
 Group=xfs-signal
 # Keys and certificates are files, never on this command line (it is visible in ps).

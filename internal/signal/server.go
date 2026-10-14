@@ -37,7 +37,9 @@ type Config struct {
 	// per prefix, and a per-address burst of new connections refilled one per
 	// ConnectRefill. Without them one machine could hold every connection slot.
 	IPConnections, PrefixConnections, ConnectCapacity int
-	ConnectRefill                                     time.Duration
+	// TURNDailyPerSource: relay credentials per address (IPv4 / IPv6 /64) a day.
+	TURNDailyPerSource int
+	ConnectRefill      time.Duration
 	// TicketKeyFile keeps the resume-ticket keys across restarts (04 §2.6);
 	// empty keeps them in memory only, so a restart ends every ticket.
 	TicketKeyFile string
@@ -55,7 +57,7 @@ type Config struct {
 
 func DefaultConfig() Config {
 	return Config{Region: "local", MaxMessageBytes: MaxMessage, SourceCreateCapacity: 10, IPJoinCapacity: 10, PrefixJoinCapacity: 60, MaxConnections: 1024, MaxRooms: 512, MaxCodes: 8192, MaxSources: 8192,
-		IPConnections: 16, PrefixConnections: 128, ConnectCapacity: 20, ConnectRefill: 3 * time.Second,
+		IPConnections: 16, PrefixConnections: 128, ConnectCapacity: 20, ConnectRefill: 3 * time.Second, TURNDailyPerSource: 300,
 		Wait: 10 * time.Minute, Negotiate: 2 * time.Minute, Orphan: time.Minute, Hard: 15 * time.Minute,
 		Hello: 5 * time.Second, Heartbeat: time.Minute, Ping: 20 * time.Second, Write: 5 * time.Second}
 }
@@ -167,7 +169,7 @@ func New(cfg Config) (*Server, error) {
 		}
 	}
 	cfg.TURNSecret = append([]byte(nil), cfg.TURNSecret...)
-	if cfg.MaxMessageBytes < 1024 || cfg.MaxMessageBytes > 1024*1024 || cfg.SourceCreateCapacity < 1 || cfg.SourceCreateCapacity > 100000 || cfg.IPJoinCapacity < 1 || cfg.IPJoinCapacity > 100000 || cfg.PrefixJoinCapacity < 1 || cfg.PrefixJoinCapacity > 100000 || cfg.MaxConnections < 1 || cfg.IPConnections < 1 || cfg.PrefixConnections < cfg.IPConnections || cfg.ConnectCapacity < 1 || cfg.ConnectRefill <= 0 || cfg.MaxRooms < 1 || cfg.MaxCodes < cfg.MaxRooms || cfg.MaxSources < 2 || cfg.Wait <= 0 || cfg.Negotiate <= 0 || cfg.Orphan <= 0 || cfg.Hard <= 0 || cfg.Hello <= 0 || cfg.Ping <= 0 || cfg.Heartbeat <= cfg.Ping || cfg.Write <= 0 {
+	if cfg.MaxMessageBytes < 1024 || cfg.MaxMessageBytes > 1024*1024 || cfg.SourceCreateCapacity < 1 || cfg.SourceCreateCapacity > 100000 || cfg.IPJoinCapacity < 1 || cfg.IPJoinCapacity > 100000 || cfg.PrefixJoinCapacity < 1 || cfg.PrefixJoinCapacity > 100000 || cfg.MaxConnections < 1 || cfg.IPConnections < 1 || cfg.PrefixConnections < cfg.IPConnections || cfg.ConnectCapacity < 1 || cfg.TURNDailyPerSource < 1 || cfg.TURNDailyPerSource > 1000000 || cfg.ConnectRefill <= 0 || cfg.MaxRooms < 1 || cfg.MaxCodes < cfg.MaxRooms || cfg.MaxSources < 2 || cfg.Wait <= 0 || cfg.Negotiate <= 0 || cfg.Orphan <= 0 || cfg.Hard <= 0 || cfg.Hello <= 0 || cfg.Ping <= 0 || cfg.Heartbeat <= cfg.Ping || cfg.Write <= 0 {
 		return nil, errors.New("invalid signaling configuration")
 	}
 	s := &Server{cfg: cfg, rooms: map[string]*room{}, codes: map[[32]byte]*room{}, retired: map[[32]byte]time.Time{}, sources: map[string]*sourceBudget{}, clients: map[*client]bool{}, done: make(chan struct{}), tickets: newTicketKeys(time.Now()), slots: map[[16]byte]*resumeSlot{}}
@@ -503,10 +505,21 @@ func (s *Server) dispatch(c *client, req request, now time.Time) time.Duration {
 			respond(c, req, failure(8051, wait))
 			break
 		}
-		switch {
-		case !verifyTURN(c, req, now):
+		if !verifyTURN(c, req, now) {
 			respond(c, req, failure(8031, 0))
-		default:
+			break
+		}
+		// A daily budget per address (IPv4 / IPv6 /64), not per connection: a
+		// script reconnecting cannot keep drawing relay credentials. Generous,
+		// because many users can share one address behind carrier NAT.
+		b := s.sources[c.source]
+		b.last = now
+		if wait := b.turn.take(now, float64(s.cfg.TURNDailyPerSource), turnDay/time.Duration(s.cfg.TURNDailyPerSource)); wait > 0 {
+			s.record(c, evTURNLimited, 0, now)
+			respond(c, req, failure(8051, wait))
+			break
+		}
+		{
 			user, cred := turnCredential(s.cfg.TURNSecret, now)
 			stun, turn := s.iceURLs(c)
 			urls := append(append([]string(nil), stun...), turn...)
@@ -759,7 +772,10 @@ func (s *Server) sweep(now time.Time) {
 		active[c.prefix] = true
 	}
 	for key, b := range s.sources {
-		if !active[key] && b.conns == 0 && now.Sub(b.last) > time.Hour && !now.Before(b.frozen) {
+		// An address that drew relay credentials is kept until its daily budget
+		// has refilled (at most a day), or the limit would reset after an hour.
+		if !active[key] && b.conns == 0 && now.Sub(b.last) > time.Hour && !now.Before(b.frozen) &&
+			b.turn.full(now, float64(s.cfg.TURNDailyPerSource), turnDay/time.Duration(s.cfg.TURNDailyPerSource)) {
 			delete(s.sources, key)
 		}
 	}

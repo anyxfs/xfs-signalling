@@ -139,7 +139,7 @@ The credential follows the coturn REST scheme (`use-auth-secret`): `username` is
 The username contains no device identifier, and the public key is used only to
 check the signature, then forgotten. `urls` are chosen for the client's region
 (§4). Errors: bad signature or too late `8031`; no relay configured `8032`; more
-than 5 requests a minute on one connection `8051`.
+than 5 requests a minute on one connection, or the daily budget of the address spent (§3), `8051`.
 
 ### 2.5 Meeting again after a disconnection
 
@@ -204,7 +204,7 @@ needs is in the ticket.
 Per connection (token buckets: a burst, then a steady refill): 60 messages, then
 20 per second; 3 rooms created, then one every 20 s (and per address 10, then one
 a minute); 5 join or resume attempts, then one every 30 s; 5 TURN credential
-requests, then one every 12 s. Per address
+requests, then one every 12 s. Per address (IPv4 address or IPv6 /64): 300 TURN credentials a day (`-turn-daily-per-source`), refilled evenly over the day; beyond that `8051` with `retryAfter`. The figure is generous because many users can share one address behind carrier NAT. Per address
 and per prefix: join budgets, failure freezes (§2.2) and concurrent connection
 caps. The defaults are in `internal/signal/server.go` and can be raised with
 flags for testing.
@@ -222,14 +222,14 @@ a region without its own list uses the default one. Example:
 | Data | Where | How long |
 | :--- | :--- | :--- |
 | Pairing codes | Memory, as keyed hashes | Until the room ends; hashes of ended codes 10 minutes more (also across a clean restart, with `-retired-codes-file`) |
-| Client IP addresses | Memory, in rate-limit records only | About one hour after the last activity |
+| Client IP addresses | Memory, in rate-limit records only | About one hour after the last activity; for an address that drew TURN credentials, until its daily budget has refilled (at most 24 hours) |
 | Connection descriptions (`payload`) | Not stored; forwarded as-is | — |
 | Ticket keys | `-ticket-key-file` (two random keys) | Rotated daily |
 | Anonymous events | `-events-db` (SQLite) | 400 days |
 
 An anonymous event row holds only: the hour, the region, the event type
 (`connect`, `rejected`, `room_created`, `room_paired`, `join_failed`,
-`room_closed`, `resumed`, `resume_failed`, `turn_issued`), an error or close code,
+`room_closed`, `resumed`, `resume_failed`, `turn_issued`, `turn_limited`), an error or close code,
 the app platform and version from `hello`, and for a closed room how long it
 lasted. It never holds an address, code, room, ticket, key or other identifier,
 and rows cannot be linked to one another. See `internal/signal/events.go`.

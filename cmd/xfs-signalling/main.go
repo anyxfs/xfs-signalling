@@ -38,6 +38,7 @@ func main() {
 	flag.IntVar(&admission.total, "max-connections", defaults.MaxConnections, "concurrent connections in all")
 	flag.IntVar(&admission.ip, "ip-connections", defaults.IPConnections, "concurrent connections per IPv4 address or IPv6 /64 (04 §3.3.5)")
 	flag.IntVar(&admission.prefix, "prefix-connections", defaults.PrefixConnections, "concurrent connections per IPv4 /24 or IPv6 /48")
+	flag.IntVar(&admission.turnDaily, "turn-daily-per-source", defaults.TURNDailyPerSource, "TURN credentials per IPv4 address or IPv6 /64 a day (generous: carrier NAT puts many users behind one address)")
 	flag.IntVar(&admission.burst, "connect-capacity", defaults.ConnectCapacity, "per-address burst of new connections (refill 1 per 3 s)")
 	flag.Parse()
 	if (*turnURLs == "") != (*turnSecretFile == "") {
@@ -87,7 +88,7 @@ var metricsListen string
 var allowedOrigins string
 
 // admission holds the connection limits main read; zero keeps the defaults.
-var admission struct{ total, ip, prefix, burst int }
+var admission struct{ total, ip, prefix, burst, turnDaily int }
 
 func run(addr, cert, key string, maxMessageBytes int64, createCapacity, ipJoinCapacity, prefixJoinCapacity int, stunURLs ...string) error {
 	if err := validateMetricsListen(metricsListen); err != nil {
@@ -119,7 +120,7 @@ func run(addr, cert, key string, maxMessageBytes int64, createCapacity, ipJoinCa
 	for _, v := range []struct {
 		from int
 		to   *int
-	}{{admission.total, &cfg.MaxConnections}, {admission.ip, &cfg.IPConnections}, {admission.prefix, &cfg.PrefixConnections}, {admission.burst, &cfg.ConnectCapacity}} {
+	}{{admission.total, &cfg.MaxConnections}, {admission.ip, &cfg.IPConnections}, {admission.prefix, &cfg.PrefixConnections}, {admission.burst, &cfg.ConnectCapacity}, {admission.turnDaily, &cfg.TURNDailyPerSource}} {
 		if v.from != 0 {
 			*v.to = v.from
 		}

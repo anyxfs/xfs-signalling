@@ -25,7 +25,13 @@ func (b *bucket) take(now time.Time, capacity float64, interval time.Duration) i
 	return 0
 }
 
+// full: the bucket has refilled to capacity (or was never used).
+func (b *bucket) full(now time.Time, capacity float64, interval time.Duration) bool {
+	return b.updated.IsZero() || b.tokens+now.Sub(b.updated).Seconds()/interval.Seconds() >= capacity
+}
+
 type sourceBudget struct {
+	turn     bucket // TURN credentials issued to this address, refilled over a day
 	join     bucket
 	create   bucket
 	connect  bucket // new connections from this address (04 §3.3.5)

@@ -26,6 +26,7 @@ type Region struct {
 
 // RegionsFile is the JSON given to -regions-file.
 type RegionsFile struct {
+	Comment string `json:"comment,omitempty"` // free text, ignored
 	// An offline country database: CSV "first,last,CC" per line (DB-IP
 	// "IP to Country Lite", CC BY 4.0), optionally gzipped.
 	GeoFile string   `json:"geo"`
