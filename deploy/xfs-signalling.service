@@ -1,0 +1,38 @@
+# /etc/systemd/system/xfs-signalling.service — XFS signalling (README.md, "Deployment")
+[Unit]
+Description=XFS signalling
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=xfs-signal
+Group=xfs-signal
+# Keys and certificates are files, never on this command line (it is visible in ps).
+ExecStart=/opt/xfs/xfs-signalling \
+  -listen :443 \
+  -tls-cert /etc/xfs/tls/fullchain.pem -tls-key /etc/xfs/tls/privkey.pem \
+  -ticket-key-file /var/lib/xfs-signalling/ticket-keys \
+  -retired-codes-file /var/lib/xfs-signalling/retired-codes \
+  -regions-file /etc/xfs/regions.json \
+  -events-db /var/lib/xfs-signalling/events.db \
+  -stun stun:stun1.anyxfs.cn:3478 \
+  -turn-urls turn:stun1.anyxfs.cn:3478?transport=udp \
+  -turn-secret-file /etc/xfs/turn-secret \
+  -max-connections 20000
+Restart=on-failure
+RestartSec=2
+LimitNOFILE=65536
+# Binds 443 without root; nothing else.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=yes
+# /var/lib/xfs-signalling (0700) holds the ticket keys; everything else read-only.
+StateDirectory=xfs-signalling
+StateDirectoryMode=0700
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+
+[Install]
+WantedBy=multi-user.target

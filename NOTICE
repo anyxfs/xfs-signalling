@@ -1,0 +1,14 @@
+AnyXFS signalling server
+Copyright 2026 The AnyXFS authors
+
+This product includes software developed by third parties under their own
+licenses, fetched as Go modules (see go.mod), notably:
+  github.com/gorilla/websocket (BSD-2-Clause)
+  modernc.org/sqlite (BSD-3-Clause)
+
+When run with -regions-file, the server reads an IP-to-country database that is
+not part of this repository; the deployment uses DB-IP "IP to Country Lite"
+(https://db-ip.com), licensed CC BY 4.0.
+
+"AnyXFS" and "安传" and the AnyXFS logo are names and marks of the AnyXFS
+project; the Apache License does not grant permission to use them (section 6).

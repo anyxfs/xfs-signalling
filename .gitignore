@@ -1,0 +1,9 @@
+/bin/
+/.cache/
+/coverage.out
+/artifacts/
+
+# Local logs and editor/cache files
+*.log
+/.idea/
+__pycache__/

@@ -1,0 +1,23 @@
+{
+  "geo": "/etc/xfs/geo-country.csv.gz",
+  "regions": [
+    {
+      "name": "cn",
+      "countries": ["CN"],
+      "stun": ["stun:stun1.anyxfs.cn:3478"],
+      "turn": []
+    },
+    {
+      "name": "eu",
+      "countries": ["AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "GR", "HU", "IE", "IT", "LV", "LT", "LU", "MT", "NL", "PL", "PT", "RO", "SK", "SI", "ES", "SE", "IS", "LI", "NO", "GB", "CH"],
+      "stun": ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"],
+      "turn": []
+    },
+    {
+      "name": "us",
+      "countries": ["US", "CA"],
+      "stun": ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"],
+      "turn": []
+    }
+  ]
+}
