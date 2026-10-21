@@ -31,7 +31,8 @@ func (b *bucket) full(now time.Time, capacity float64, interval time.Duration) b
 }
 
 type sourceBudget struct {
-	turn     bucket // TURN credentials issued to this address, refilled over a day
+	turnDay  int64 // beijingDay of turnUsed
+	turnUsed int   // TURN credentials issued to this address on turnDay
 	join     bucket
 	create   bucket
 	connect  bucket // new connections from this address (04 §3.3.5)
@@ -39,6 +40,34 @@ type sourceBudget struct {
 	failures []time.Time
 	frozen   time.Time
 	last     time.Time
+}
+
+// beijingDay numbers calendar days in Beijing time (UTC+8): the daily relay
+// budget resets at Beijing midnight for everyone (design 2026-10-19 §5).
+func beijingDay(t time.Time) int64 { return (t.Unix() + 8*3600) / 86400 }
+
+// nextBeijingMidnight is the start of the Beijing day after t's.
+func nextBeijingMidnight(t time.Time) time.Time {
+	return time.Unix((beijingDay(t)+1)*86400-8*3600, 0).UTC()
+}
+
+// takeTURN counts one relay credential against today's budget; when it is spent
+// it reports when the budget comes back.
+func (b *sourceBudget) takeTURN(now time.Time, limit int) (bool, time.Time) {
+	if day := beijingDay(now); day != b.turnDay {
+		b.turnDay, b.turnUsed = day, 0
+	}
+	if b.turnUsed >= limit {
+		return false, nextBeijingMidnight(now)
+	}
+	b.turnUsed++
+	return true, time.Time{}
+}
+
+// turnSpentToday: the address drew relay credentials today, so its record has to
+// outlive the idle cleanup or the limit would reset early.
+func (b *sourceBudget) turnSpentToday(now time.Time) bool {
+	return b.turnUsed > 0 && b.turnDay == beijingDay(now)
 }
 
 func (b *sourceBudget) fail(now time.Time) (int, time.Duration) {

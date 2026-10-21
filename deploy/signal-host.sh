@@ -26,6 +26,17 @@ sysctl --system >/dev/null
 echo "== 3. service user, files"
 id xfs-signal >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin xfs-signal
 install -d -m 750 -g xfs-signal /etc/xfs /etc/xfs/tls
+# Service notices: the operator's login account (NOTICES_OWNER, by default "operator")
+# uploads notices.json to its ~/messages; the service sees that directory read-only at
+# /etc/xfs/messages (BindReadOnlyPaths in xfs-signalling.service names the same path).
+owner=${NOTICES_OWNER:-operator}
+install -d -m 755 /etc/xfs/messages
+if id "$owner" >/dev/null 2>&1; then
+	install -d -m 755 -o "$owner" -g "$owner" "/home/$owner/messages"
+	chmod o+x "/home/$owner"
+else
+	echo "warning: no user $owner, so no /home/$owner/messages: the server runs without notices"
+fi
 if [ -f "$here/turn-secret" ]; then
 	install -m 640 -g xfs-signal "$here/turn-secret" /etc/xfs/turn-secret
 	rm -f "$here/turn-secret"

@@ -29,6 +29,7 @@ const (
 	evResumeFailed = "resume_failed" // detail: error code
 	evTURNIssued   = "turn_issued"   //
 	evTURNLimited  = "turn_limited"  // daily per-address budget spent
+	evTURNPaused   = "turn_paused"   // the operator paused the relay (notices.json)
 )
 
 const eventRetention = 400 * 24 * time.Hour

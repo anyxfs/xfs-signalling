@@ -2,6 +2,7 @@ package signal
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -50,8 +51,14 @@ type Config struct {
 	// each anonymous event (geo.go, events.go). GeoFile is the offline country
 	// database; without it every client is in DefaultRegion. EventsDB empty:
 	// no events are recorded.
-	Regions                                                      []Region
-	GeoFile, EventsDB                                            string
+	Regions           []Region
+	GeoFile, EventsDB string
+	// Signed service notices (notices.go): NoticesFile is checked every few
+	// seconds, NoticesCache keeps the last good version over a restart, and
+	// NoticesKeys are the operator's public keys by envelope key id. Without a
+	// file there are no notices and the relay is never paused by notice.
+	NoticesFile, NoticesCache                                    string
+	NoticesKeys                                                  map[string]ed25519.PublicKey
 	Wait, Negotiate, Orphan, Hard, Hello, Heartbeat, Ping, Write time.Duration
 }
 
@@ -131,6 +138,8 @@ type Server struct {
 	slots       map[[16]byte]*resumeSlot // guarded by mu
 	regions     *regionTable
 	events      *eventLog
+	notices     *noticeWatcher // nil without Config.NoticesFile
+	noticesAt   time.Time      // last check; guarded by mu (sweep goroutine)
 	mu          sync.Mutex
 	rooms       map[string]*room
 	codes       map[[32]byte]*room
@@ -203,6 +212,12 @@ func New(cfg Config) (*Server, error) {
 	if cfg.RetiredCodesFile != "" {
 		s.loadRetired(cfg.RetiredCodesFile, time.Now())
 	}
+	if cfg.NoticesFile != "" {
+		if len(cfg.NoticesKeys) == 0 {
+			return nil, errors.New("notices need at least one public key")
+		}
+		s.notices = newNoticeWatcher(cfg.NoticesFile, cfg.NoticesCache, cfg.NoticesKeys)
+	}
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
@@ -213,7 +228,14 @@ func New(cfg Config) (*Server, error) {
 			case now := <-t.C:
 				s.mu.Lock()
 				s.sweep(now)
+				due := s.notices != nil && now.Sub(s.noticesAt) >= noticesEvery
+				if due {
+					s.noticesAt = now
+				}
 				s.mu.Unlock()
+				if due {
+					s.pollNotices()
+				}
 			case <-s.done:
 				return
 			}
@@ -407,7 +429,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				panic(err)
 			}
 			m := message{"t": "hello_ok", "v": 1, "minClientProto": 1, "serverTime": c.helloAt, "region": s.cfg.Region, "draining": false,
-				"connNonce": base64.RawURLEncoding.EncodeToString(c.connNonce[:])}
+				"connNonce": base64.RawURLEncoding.EncodeToString(c.connNonce[:]), "notices": s.activeNotices(time.Now(), c.platform)}
 			respond(c, req, m)
 			_ = ws.SetReadDeadline(time.Now().Add(s.cfg.Heartbeat))
 			continue
@@ -501,6 +523,14 @@ func (s *Server) dispatch(c *client, req request, now time.Time) time.Duration {
 			respond(c, req, failure(8032, 0)) // no relay here: P2P only
 			break
 		}
+		if s.notices != nil && s.notices.current().RelayPaused {
+			// The operator paused the relay; clients still try a direct connection.
+			s.record(c, evTURNPaused, 0, now)
+			m := failure(8032, 0)
+			m["reason"] = "paused"
+			respond(c, req, m)
+			break
+		}
 		if wait := c.turn.take(now, 5, 12*time.Second); wait > 0 {
 			respond(c, req, failure(8051, wait))
 			break
@@ -511,12 +541,15 @@ func (s *Server) dispatch(c *client, req request, now time.Time) time.Duration {
 		}
 		// A daily budget per address (IPv4 / IPv6 /64), not per connection: a
 		// script reconnecting cannot keep drawing relay credentials. Generous,
-		// because many users can share one address behind carrier NAT.
+		// because many users can share one address behind carrier NAT. It counts a
+		// Beijing calendar day; 8030 tells the client when it comes back.
 		b := s.sources[c.source]
 		b.last = now
-		if wait := b.turn.take(now, float64(s.cfg.TURNDailyPerSource), turnDay/time.Duration(s.cfg.TURNDailyPerSource)); wait > 0 {
+		if ok, reset := b.takeTURN(now, s.cfg.TURNDailyPerSource); !ok {
 			s.record(c, evTURNLimited, 0, now)
-			respond(c, req, failure(8051, wait))
+			m := failure(8030, 0)
+			m["resetAt"] = reset.Unix()
+			respond(c, req, m)
 			break
 		}
 		{
@@ -774,8 +807,7 @@ func (s *Server) sweep(now time.Time) {
 	for key, b := range s.sources {
 		// An address that drew relay credentials is kept until its daily budget
 		// has refilled (at most a day), or the limit would reset after an hour.
-		if !active[key] && b.conns == 0 && now.Sub(b.last) > time.Hour && !now.Before(b.frozen) &&
-			b.turn.full(now, float64(s.cfg.TURNDailyPerSource), turnDay/time.Duration(s.cfg.TURNDailyPerSource)) {
+		if !active[key] && b.conns == 0 && now.Sub(b.last) > time.Hour && !now.Before(b.frozen) && !b.turnSpentToday(now) {
 			delete(s.sources, key)
 		}
 	}
@@ -810,6 +842,30 @@ func (s *Server) iceServers(c *client) []message {
 		servers = append(servers, message{"urls": []string{uri}})
 	}
 	return servers
+}
+
+// noticesEvery: how often the notices file is checked (only its hash when unchanged).
+const noticesEvery = 5 * time.Second
+
+// pollNotices reads a changed notices file; a bad one is logged and counted and
+// the current version stays.
+func (s *Server) pollNotices() {
+	if s.notices == nil {
+		return
+	}
+	if changed, err := s.notices.poll(); err != nil {
+		s.metrics.noticesRejected.Add(1)
+		log.Printf("notices file rejected, keeping the current version: %v", err)
+	} else if changed {
+		log.Printf("notices updated (issued %s)", s.notices.current().IssuedAt.Format(time.RFC3339))
+	}
+}
+
+func (s *Server) activeNotices(now time.Time, platform string) []message {
+	if s.notices == nil {
+		return []message{}
+	}
+	return s.notices.current().active(now, platform)
 }
 
 // record adds an anonymous event for a client; detail 0 means none.

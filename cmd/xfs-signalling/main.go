@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/tls"
+	"encoding/base64"
 	"flag"
 	"fmt"
 	"log"
@@ -34,6 +36,9 @@ func main() {
 	flag.StringVar(&regionsFile, "regions-file", "", "JSON: offline country database and per-region STUN / TURN lists (internal/signal/geo.go); empty: one list for every client")
 	flag.StringVar(&eventsDB, "events-db", "", "SQLite file for anonymous events (hour, region, event, client platform and version; internal/signal/events.go); empty: none recorded")
 	flag.StringVar(&retiredCodesFile, "retired-codes-file", "", "file carrying recently ended pairing codes over a clean restart so none is reused within 10 minutes (04 §3.2); empty: not carried")
+	flag.StringVar(&notices.file, "notices-file", "", "signed service notices (internal/signal/notices.go), checked every 5 s; empty: no notices, relay never paused by notice")
+	flag.StringVar(&notices.cache, "notices-cache", "", "last good notices file, kept over a restart")
+	noticeKeys := flag.String("notices-pubkey", "", "operator public keys for notices: id:base64[,id:base64]")
 	defaults := sig.DefaultConfig()
 	flag.IntVar(&admission.total, "max-connections", defaults.MaxConnections, "concurrent connections in all")
 	flag.IntVar(&admission.ip, "ip-connections", defaults.IPConnections, "concurrent connections per IPv4 address or IPv6 /64 (04 §3.3.5)")
@@ -41,6 +46,14 @@ func main() {
 	flag.IntVar(&admission.turnDaily, "turn-daily-per-source", defaults.TURNDailyPerSource, "TURN credentials per IPv4 address or IPv6 /64 a day (generous: carrier NAT puts many users behind one address)")
 	flag.IntVar(&admission.burst, "connect-capacity", defaults.ConnectCapacity, "per-address burst of new connections (refill 1 per 3 s)")
 	flag.Parse()
+	if notices.file != "" {
+		keys, err := parseNoticeKeys(*noticeKeys)
+		if err != nil {
+			log.Print(err)
+			os.Exit(1)
+		}
+		notices.keys = keys
+	}
 	if (*turnURLs == "") != (*turnSecretFile == "") {
 		log.Print("-turn-urls and -turn-secret-file go together")
 		os.Exit(1)
@@ -80,6 +93,30 @@ var regionsFile, eventsDB string
 // retiredCodesFile is where a stopping server leaves its code quarantine.
 var retiredCodesFile string
 
+// notices: the signed notices file, its cache and the keys; run applies them.
+var notices struct {
+	file, cache string
+	keys        map[string]ed25519.PublicKey
+}
+
+// parseNoticeKeys reads "-notices-pubkey": id:base64[,id:base64], each a 32-byte
+// Ed25519 public key, ids distinct.
+func parseNoticeKeys(s string) (map[string]ed25519.PublicKey, error) {
+	keys := map[string]ed25519.PublicKey{}
+	for _, part := range strings.Split(s, ",") {
+		id, b64, ok := strings.Cut(strings.TrimSpace(part), ":")
+		raw, err := base64.StdEncoding.DecodeString(b64)
+		if !ok || id == "" || err != nil || len(raw) != ed25519.PublicKeySize {
+			return nil, fmt.Errorf("-notices-pubkey: %q is not id:base64-ed25519-key", part)
+		}
+		if keys[id] != nil {
+			return nil, fmt.Errorf("-notices-pubkey: id %q twice", id)
+		}
+		keys[id] = ed25519.PublicKey(raw)
+	}
+	return keys, nil
+}
+
 // ticketKeyFile is where the resume-ticket keys live; run applies it.
 var ticketKeyFile string
 
@@ -108,6 +145,7 @@ func run(addr, cert, key string, maxMessageBytes int64, createCapacity, ipJoinCa
 		}
 	}
 	cfg := sig.DefaultConfig()
+	cfg.NoticesFile, cfg.NoticesCache, cfg.NoticesKeys = notices.file, notices.cache, notices.keys
 	if allowedOrigins != "" {
 		cfg.AllowedOrigins = strings.Split(allowedOrigins, ",")
 	}

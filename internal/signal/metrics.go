@@ -15,6 +15,7 @@ type metrics struct {
 	resumeOK, resumeFail           atomic.Uint64
 	turnOK, turnFail               atomic.Uint64
 	keyRotations, keyWriteFailures atomic.Uint64
+	noticesRejected                atomic.Uint64
 }
 
 const (
@@ -95,6 +96,7 @@ func (s *Server) MetricsHandler() http.Handler {
 			{"sig_room_paired_total", "Rooms paired by pairing code.", s.metrics.paired.Load()},
 			{"sig_ticket_key_rotations_total", "In-process ticket key rotations after startup.", s.metrics.keyRotations.Load()},
 			{"sig_ticket_key_write_failures_total", "Failed in-process ticket key writes after startup.", s.metrics.keyWriteFailures.Load()},
+			{"sig_notices_rejected_total", "Notices files refused (signature, format or not newer); the current version stays.", s.metrics.noticesRejected.Load()},
 		} {
 			family(entry.name, entry.help)
 			fmt.Fprintf(w, "%s %d\n", entry.name, entry.value)

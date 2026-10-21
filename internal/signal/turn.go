@@ -23,7 +23,6 @@ import (
 const (
 	turnTag      = "XFS-TURNREQ-v1"
 	turnTTL      = time.Hour
-	turnDay      = 24 * time.Hour
 	turnSkew     = 300 * time.Second
 	turnMaxNodes = 2
 )

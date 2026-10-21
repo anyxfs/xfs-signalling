@@ -19,7 +19,10 @@ ExecStart=/opt/xfs/xfs-signalling \
   -stun stun:stun1.anyxfs.cn:3478 \
   -turn-urls turn:stun1.anyxfs.cn:3478?transport=udp \
   -turn-secret-file /etc/xfs/turn-secret \
-  -max-connections 20000
+  -max-connections 20000 \
+  -notices-file /etc/xfs/messages/notices.json \
+  -notices-cache /var/lib/xfs-signalling/notices.last.json \
+  -notices-pubkey n1:REPLACE_WITH_YOUR_NOTICES_PUBLIC_KEY
 Restart=on-failure
 RestartSec=2
 LimitNOFILE=65536
@@ -32,6 +35,11 @@ StateDirectory=xfs-signalling
 StateDirectoryMode=0700
 ProtectSystem=strict
 ProtectHome=yes
+# Service notices (PROTOCOL.md "Service notices"): the operator uploads a signed
+# notices.json to its ~/messages (NOTICES_OWNER in signal-host.sh); only that directory
+# is visible here, read-only. "-": a host without it still starts, with no notices.
+# -notices-pubkey above: the public key `xfs-notice keygen` printed for your signing key.
+BindReadOnlyPaths=-/home/operator/messages:/etc/xfs/messages
 PrivateTmp=yes
 PrivateDevices=yes
 

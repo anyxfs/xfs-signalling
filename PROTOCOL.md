@@ -52,11 +52,12 @@ The first message must be `hello`, within 5 seconds:
 §5); anything else counts as an unknown platform.
 
 ```json
-{"t":"hello_ok","v":1,"minClientProto":1,"serverTime":1792000000,"region":"local","draining":false,"connNonce":"<32 bytes>"}
+{"t":"hello_ok","v":1,"minClientProto":1,"serverTime":1792000000,"region":"local","draining":false,"connNonce":"<32 bytes>","notices":[]}
 ```
 
 `serverTime` is Unix seconds. `connNonce` is fresh for this connection and binds the
-signatures in §2.4 and §2.5 to it. A first message other than `hello` gets `8003`,
+signatures in §2.4 and §2.5 to it. `notices` lists the operator's service notices
+showing now (always present, possibly empty); see "Service notices" below. A first message other than `hello` gets `8003`,
 an unsupported `v` gets `8002`; both close the connection.
 
 Keep-alive: the server sends WebSocket pings every 20 s and closes a connection
@@ -139,7 +140,10 @@ The credential follows the coturn REST scheme (`use-auth-secret`): `username` is
 The username contains no device identifier, and the public key is used only to
 check the signature, then forgotten. `urls` are chosen for the client's region
 (§4). Errors: bad signature or too late `8031`; no relay configured `8032`; more
-than 5 requests a minute on one connection, or the daily budget of the address spent (§3), `8051`.
+than 5 requests a minute on one connection `8051`; the daily budget of the address spent (§3)
+`8030` with `resetAt` (Unix seconds, the next midnight in Beijing time); the relay paused
+by the operator `8032` with `"reason":"paused"`. Clients treat `8030` and `8032` as
+"no relay this time" and still try a direct connection.
 
 ### 2.5 Meeting again after a disconnection
 
@@ -193,18 +197,39 @@ needs is in the ticket.
 | 8022 | Pairing was not completed in time |
 | 8023 | The other side left |
 | 8031 | TURN request signature invalid or too late |
-| 8032 | No relay configured on this server (direct connections only) |
+| 8030 | This address has used today's relay credentials; `resetAt` says when they come back |
+| 8032 | No relay: none configured, or paused by the operator (`"reason":"paused"`); direct connections only |
 | 8040 | Server-side capacity or internal error |
 | 8050 | Forwarded message would exceed the size limit |
 | 8051 | Too many messages on this connection |
 | 8060 | Resume rejected (ticket, identity or signature) |
+
+
+## Service notices
+
+With `-notices-file`, the server reads a signed notices file every 5 s (only its
+hash when unchanged) and sends the entries showing now in `hello_ok`:
+
+```json
+{"id":"maint-2026-10-25","level":"warning","startsAt":1792000000,"endsAt":1792090000,
+ "title":{"zh-CN":"…","zh-TW":"…","en":"…","ja":"…"},"body":{…},"link":{"en":"https://…"}}
+```
+
+`level` is `info` or `warning`; `startsAt`/`endsAt` (Unix seconds) bound when the
+notice is shown. `link` is optional and never sent to `ios` or `macos` clients.
+The file is an envelope `{"payload":base64(JSON),"sig":base64(Ed25519),"key":"n1"}`
+signed with the operator's key (`cmd/xfs-notice`); `-notices-pubkey` lists the
+accepted public keys. A file that does not verify, or whose `issuedAt` is not newer
+than the current one, is refused and the current version stays
+(`sig_notices_rejected_total`). Its `relayPaused` flag makes `turn_credentials`
+answer `8032` with `"reason":"paused"`.
 
 ## 3. Limits
 
 Per connection (token buckets: a burst, then a steady refill): 60 messages, then
 20 per second; 3 rooms created, then one every 20 s (and per address 10, then one
 a minute); 5 join or resume attempts, then one every 30 s; 5 TURN credential
-requests, then one every 12 s. Per address (IPv4 address or IPv6 /64): 300 TURN credentials a day (`-turn-daily-per-source`), refilled evenly over the day; beyond that `8051` with `retryAfter`. The figure is generous because many users can share one address behind carrier NAT. Per address
+requests, then one every 12 s. Per address (IPv4 address or IPv6 /64): 300 TURN credentials a day (`-turn-daily-per-source`), counted per calendar day in Beijing time (UTC+8); beyond that `8030` with `resetAt`. The figure is generous because many users can share one address behind carrier NAT. Per address
 and per prefix: join budgets, failure freezes (§2.2) and concurrent connection
 caps. The defaults are in `internal/signal/server.go` and can be raised with
 flags for testing.
@@ -222,7 +247,7 @@ a region without its own list uses the default one. Example:
 | Data | Where | How long |
 | :--- | :--- | :--- |
 | Pairing codes | Memory, as keyed hashes | Until the room ends; hashes of ended codes 10 minutes more (also across a clean restart, with `-retired-codes-file`) |
-| Client IP addresses | Memory, in rate-limit records only | About one hour after the last activity; for an address that drew TURN credentials, until its daily budget has refilled (at most 24 hours) |
+| Client IP addresses | Memory, in rate-limit records only | About one hour after the last activity; for an address that drew TURN credentials, until the end of that Beijing day (at most 24 hours) |
 | Connection descriptions (`payload`) | Not stored; forwarded as-is | — |
 | Ticket keys | `-ticket-key-file` (two random keys) | Rotated daily |
 | Anonymous events | `-events-db` (SQLite) | 400 days |

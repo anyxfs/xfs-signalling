@@ -23,6 +23,9 @@ var forbiddenPeers = map[byte][]string{
 	2: {"::ffff:127.0.0.1", "::ffff:10.0.0.1", "::ffff:169.254.0.23", "::1", "fd00::1", "fe80::1"},
 }
 
+// CreatePermission checks policy without sending any packet to these peers.
+var publicPeers = map[byte]string{1: "1.1.1.1", 2: "2606:4700:4700::1111"}
+
 const (
 	stunAllocate         = 0x0003
 	stunRefresh          = 0x0004
@@ -68,7 +71,7 @@ func probePeers(endpoint, user, pass string, timeout time.Duration) (int, string
 	if len(granted) > 0 {
 		return 1, fmt.Sprintf("FAIL: relay to forbidden peers allowed: %v (%s)", granted, report[1:])
 	}
-	return 0, "OK: forbidden peers refused (" + report[1:] + ")"
+	return 0, "OK: public peers allowed and forbidden peers refused (" + report[1:] + ")"
 }
 
 func probeFamily(endpoint, user, pass string, family byte, timeout time.Duration) (int, []string, string) {
@@ -131,6 +134,15 @@ func checkPeers(call stunCaller, family byte) ([]string, string, error) {
 	defer call(stunRefresh, stunAttr{attrLifetime, []byte{0, 0, 0, 0}})
 	var granted []string
 	report := ""
+	public := publicPeers[family]
+	r, err := call(stunCreatePermission, stunAttr{attrXorPeer, xorPeer(netip.MustParseAddr(public))})
+	if err != nil {
+		return nil, "", err
+	}
+	if r.class != 0x0100 {
+		return nil, "", fmt.Errorf("public peer %s CreatePermission refused (%d); relay may deny all peers", public, r.code)
+	}
+	report += fmt.Sprintf(" %s=allowed", public)
 	for _, peer := range forbiddenPeers[family] {
 		r, err := call(stunCreatePermission, stunAttr{attrXorPeer, xorPeer(netip.MustParseAddr(peer))})
 		if err != nil {
