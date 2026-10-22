@@ -13,6 +13,12 @@ This repository is published so that what we say about the server can be checked
 what it receives, what it keeps (very little, see [PROTOCOL.md §5](PROTOCOL.md#5-what-the-server-keeps)),
 and how the relay is configured. The AnyXFS apps themselves are not part of it.
 
+The apps are deliberately not open source. For a file-transfer app, modified copies
+that carry viruses or other malicious code and pass themselves off as AnyXFS are a
+real risk, and we would rather not make such copies easy to build. AnyXFS is
+published only in the official app stores, linked from [www.anyxfs.com](https://www.anyxfs.com);
+please install it only from there.
+
 - [PROTOCOL.md](PROTOCOL.md) — the wire protocol and what the server stores
 - [`deploy/`](deploy) — the systemd unit, coturn configuration and host scripts we use
 
@@ -85,4 +91,8 @@ and the logo are not licensed for reuse.
 
 这是 [安传 AnyXFS](https://www.anyxfs.cn) 的信令服务器源码。安传是免费的设备间传文件应用，覆盖 Windows、macOS、Android 与 iOS。同一网络内的传输完全不经过这台服务器；跨网时，两台设备通过它用 8 位配对码碰头、交换连接信息，之后直接连接并端到端加密；无法直连时经开源中继 coturn 转发，中继只能看到密文。
 
-公开源码是为了让大家能核实我们的说法：服务器收到什么、保存什么（很少，见 [PROTOCOL.md 第 5 节](PROTOCOL.md#5-what-the-server-keeps)）、中继如何配置。安传应用本身不在本仓库中。许可证为 Apache-2.0；"安传""AnyXFS"名称与标志不在授权范围内。
+公开源码是为了让大家能核实我们的说法：服务器收到什么、保存什么（很少，见 [PROTOCOL.md 第 5 节](PROTOCOL.md#5-what-the-server-keeps)）、中继如何配置。安传应用本身不在本仓库中。
+
+安传应用不开源，这是有意的决定：传文件的应用一旦被人改出夹带病毒或其他恶意代码的版本、冒充安传传播，危害很大，我们不希望让这种篡改变得容易。安传只在官方应用商店上架，下载入口见[官网](https://www.anyxfs.cn)，请只从这些渠道安装。
+
+许可证为 Apache-2.0；"安传""AnyXFS"名称与标志不在授权范围内。
