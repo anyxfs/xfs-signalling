@@ -390,8 +390,6 @@ func TestOrphanAndCodeCapacity(t *testing.T) {
 	orphanEnd := rm.orphan
 	s.mu.Unlock()
 	creator.stop()
-	send(t, b, message{"t": "join_room", "code": r["code"]})
-	expectError(t, b, 8010)
 	s.mu.Lock()
 	s.sweep(orphanEnd)
 	rooms, codes, retired := len(s.rooms), len(s.codes), len(s.retired)
@@ -399,8 +397,124 @@ func TestOrphanAndCodeCapacity(t *testing.T) {
 	if rooms != 0 || codes != 0 || retired != 1 {
 		t.Fatal("orphan not retired")
 	}
+	send(t, b, message{"t": "join_room", "code": r["code"]})
+	expectError(t, b, 8010)
 	send(t, b, message{"t": "create_room"})
 	expectError(t, b, 8014) // quarantine also counts toward memory cap
+}
+
+// 04 §2.3.4: the creator's connection drops while it waits (the app went to the
+// background); a new connection with the room's claim gets the same room back,
+// its wait not restarted.
+func TestCreatorClaimsOrphanedRoom(t *testing.T) {
+	s, url := fixture(t, nil)
+	a := dial(t, url)
+	hello(t, a)
+	r := create(t, a)
+	claim, _ := r["claim"].(string)
+	if len(claim) != 22 {
+		t.Fatalf("room_created without a claim: %v", r)
+	}
+	_ = a.Close()
+	waitOrphaned(t, s, r["room"].(string))
+
+	stranger := dial(t, url)
+	hello(t, stranger)
+	send(t, stranger, message{"t": "claim_room", "claim": "AAAAAAAAAAAAAAAAAAAAAA"})
+	expectError(t, stranger, 8020)
+
+	a2 := dial(t, url)
+	hello(t, a2)
+	send(t, a2, message{"t": "claim_room", "claim": claim})
+	m := receive(t, a2, "room_claimed")
+	if m["room"] != r["room"] || m["expiresAt"] != r["expiresAt"] {
+		t.Fatalf("claimed %v, created %v", m, r)
+	}
+	s.mu.Lock()
+	rm := s.rooms[r["room"].(string)]
+	if rm == nil || rm.creator == nil || !rm.orphan.IsZero() {
+		s.mu.Unlock()
+		t.Fatal("room not back to waiting")
+	}
+	s.mu.Unlock()
+
+	// The creator may come back before the server noticed its old connection
+	// die (a frozen app): the claim takes the room over and the old one is closed.
+	a3 := dial(t, url)
+	hello(t, a3)
+	send(t, a3, message{"t": "claim_room", "claim": claim})
+	receive(t, a3, "room_claimed")
+	_ = a2.SetReadDeadline(time.Now().Add(4 * time.Second))
+	if _, _, err := a2.ReadMessage(); err == nil {
+		t.Fatal("replaced connection still open")
+	}
+
+	// The code still works, through the new connection.
+	b := dial(t, url)
+	hello(t, b)
+	send(t, b, message{"t": "join_room", "code": r["code"]})
+	receive(t, b, "room_joined")
+	receive(t, a3, "peer_joined")
+}
+
+// Somebody joins with the code while its creator is away: the join is held and
+// the creator, back with the claim, learns at once that a peer is waiting.
+func TestJoinWhileCreatorAwayWaitsForTheClaim(t *testing.T) {
+	s, url := fixture(t, nil)
+	a := dial(t, url)
+	hello(t, a)
+	r := create(t, a)
+	_ = a.Close()
+	waitOrphaned(t, s, r["room"].(string))
+
+	b := dial(t, url)
+	hello(t, b)
+	send(t, b, message{"t": "join_room", "code": r["code"]})
+	receive(t, b, "room_joined")
+
+	a2 := dial(t, url)
+	hello(t, a2)
+	send(t, a2, message{"t": "claim_room", "claim": r["claim"]})
+	receive(t, a2, "room_claimed")
+	receive(t, a2, "peer_joined")
+	send(t, a2, message{"t": "signal", "room": r["room"], "kind": "offer", "payload": "x"})
+	receive(t, b, "signal")
+}
+
+// A creator who never comes back: the waiting joiner is told the room closed.
+func TestJoinerOfAnAbandonedRoomIsReleased(t *testing.T) {
+	s, url := fixture(t, nil)
+	a := dial(t, url)
+	hello(t, a)
+	r := create(t, a)
+	_ = a.Close()
+	waitOrphaned(t, s, r["room"].(string))
+	b := dial(t, url)
+	hello(t, b)
+	send(t, b, message{"t": "join_room", "code": r["code"]})
+	receive(t, b, "room_joined")
+	s.mu.Lock()
+	rm := s.rooms[r["room"].(string)]
+	s.sweep(rm.orphan)
+	s.mu.Unlock()
+	if m := receive(t, b, "room_closed"); m["reason"] != float64(8022) {
+		t.Fatal(m)
+	}
+}
+
+func waitOrphaned(t *testing.T, s *Server, id string) {
+	t.Helper()
+	for range 200 {
+		s.mu.Lock()
+		rm := s.rooms[id]
+		done := rm != nil && rm.creator == nil
+		s.mu.Unlock()
+		if done {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("creator's disconnect not seen")
 }
 
 func TestPenaltyScheduleAndCleanup(t *testing.T) {

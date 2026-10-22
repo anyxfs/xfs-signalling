@@ -29,6 +29,7 @@ type request struct {
 	Sig     string  `json:"sig,omitempty"`
 	PKHash  string  `json:"pkHash,omitempty"`
 	Ticket  string  `json:"ticket,omitempty"`
+	Claim   string  `json:"claim,omitempty"`
 	TS      *uint64 `json:"ts,omitempty"`
 	SDP     *bool   `json:"sdpNeeded,omitempty"`
 }
@@ -85,7 +86,7 @@ func decode(data []byte) (request, error) {
 			return r, errors.New("invalid id")
 		}
 	}
-	allowed := map[string]string{"hello": "v client", "create_room": "", "join_room": "code", "signal": "room kind payload", "ready": "room pkHash", "resume": "ticket pk ts sig sdpNeeded", "bye": "room reason", "ping": "", "turn_credentials": "pk nonce sig"}
+	allowed := map[string]string{"hello": "v client", "create_room": "", "join_room": "code", "signal": "room kind payload", "ready": "room pkHash", "resume": "ticket pk ts sig sdpNeeded", "claim_room": "claim", "bye": "room reason", "ping": "", "turn_credentials": "pk nonce sig"}
 	fields, ok := allowed[r.Type]
 	if !ok {
 		return r, errors.New("unsupported message")
@@ -122,6 +123,10 @@ func decode(data []byte) (request, error) {
 			if err != nil || len(b) != f.n {
 				return r, errors.New("invalid turn_credentials field")
 			}
+		}
+	case "claim_room":
+		if b, err := base64.RawURLEncoding.DecodeString(r.Claim); err != nil || len(b) != 16 {
+			return r, errors.New("invalid claim")
 		}
 	case "join_room":
 		if !seen["code"] {

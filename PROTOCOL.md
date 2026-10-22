@@ -68,7 +68,8 @@ that has been silent for 60 s. Clients may also send `{"t":"ping"}` and get
 
 | Client sends | Server answers |
 | :--- | :--- |
-| `{"t":"create_room"}` | `{"t":"room_created","room":"<id>","code":"83920174","expiresAt":<unix>,"iceServers":[{"urls":["stun:…"]}]}` |
+| `{"t":"create_room"}` | `{"t":"room_created","room":"<id>","code":"83920174","expiresAt":<unix>,"iceServers":[{"urls":["stun:…"]}],"claim":"<16 bytes>"}` |
+| `{"t":"claim_room","claim":"<16 bytes>"}` | `{"t":"room_claimed","room":"<id>","expiresAt":<unix>}`, then `peer_joined` if somebody joined meanwhile; `8020` if the room is gone |
 | `{"t":"join_room","code":"8392 0174"}` | to the joiner `{"t":"room_joined","room":"<id>","peerEphemeralId":"<id>","iceServers":[…]}`; to the creator `{"t":"peer_joined","room":"<id>","peerEphemeralId":"<id>"}` |
 
 - Codes are 8 uniformly random digits, first digit non-zero. Spaces and hyphens
@@ -81,6 +82,15 @@ that has been silent for 60 s. Clients may also send `{"t":"ping"}` and get
   `retryAfter` and a freeze of one minute, ten minutes, then one hour.
 - `iceServers` holds STUN URLs chosen for the client's region (§4).
 - One connection holds at most one room.
+- When the creator's connection drops before anyone joined (a phone app sent to
+  the background is often frozen and loses it), the room waits three minutes
+  for it. A new connection presenting the room's `claim` takes it back: same
+  code, same `expiresAt`. If the old connection is still open (the server has
+  not noticed it die), it is closed. `claim` goes only to the creator; keep it
+  in memory.
+- A `join_room` for a room whose creator is away succeeds as usual; the joiner
+  waits, and the creator gets `peer_joined` when it claims the room. A creator
+  that does not come back closes the room with `8022`.
 
 ### 2.3 Exchanging connection descriptions
 
@@ -253,7 +263,7 @@ a region without its own list uses the default one. Example:
 | Anonymous events | `-events-db` (SQLite) | 400 days |
 
 An anonymous event row holds only: the hour, the region, the event type
-(`connect`, `rejected`, `room_created`, `room_paired`, `join_failed`,
+(`connect`, `rejected`, `room_created`, `room_paired`, `room_claimed`, `join_failed`,
 `room_closed`, `resumed`, `resume_failed`, `turn_issued`, `turn_limited`), an error or close code,
 the app platform and version from `hello`, and for a closed room how long it
 lasted. It never holds an address, code, room, ticket, key or other identifier,

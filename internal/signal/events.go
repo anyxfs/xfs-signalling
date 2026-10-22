@@ -23,6 +23,7 @@ const (
 	evRejected     = "rejected"      // detail: 429 / 503
 	evRoomCreated  = "room_created"  //
 	evRoomPaired   = "room_paired"   //
+	evRoomClaimed  = "room_claimed"  // the creator came back after its connection dropped
 	evJoinFailed   = "join_failed"   // detail: 8010 / 8012 / 8013
 	evRoomClosed   = "room_closed"   // detail: close reason; seconds since paired
 	evResumed      = "resumed"       //

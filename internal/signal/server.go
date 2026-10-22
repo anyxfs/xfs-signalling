@@ -6,6 +6,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -65,7 +66,7 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{Region: "local", MaxMessageBytes: MaxMessage, SourceCreateCapacity: 10, IPJoinCapacity: 10, PrefixJoinCapacity: 60, MaxConnections: 1024, MaxRooms: 512, MaxCodes: 8192, MaxSources: 8192,
 		IPConnections: 16, PrefixConnections: 128, ConnectCapacity: 20, ConnectRefill: 3 * time.Second, TURNDailyPerSource: 300,
-		Wait: 10 * time.Minute, Negotiate: 2 * time.Minute, Orphan: time.Minute, Hard: 15 * time.Minute,
+		Wait: 10 * time.Minute, Negotiate: 2 * time.Minute, Orphan: 3 * time.Minute, Hard: 15 * time.Minute,
 		Hello: 5 * time.Second, Heartbeat: time.Minute, Ping: 20 * time.Second, Write: 5 * time.Second}
 }
 
@@ -78,6 +79,7 @@ type room struct {
 	ready                 [2]bool
 	eids                  [2]string
 	session               [16]byte    // 04 §2.6: random at creation, kept across resumes
+	claim                 [16]byte    // 04 §2.3.4: lets the creator take the room back after its connection drops
 	pkHash                [2][16]byte // from each side's ready
 	firstIssued           int64       // a resumed session's first ticket; 0 for a new one
 	// For the room_closed event: the creator's region and client, and when the
@@ -597,12 +599,16 @@ func (s *Server) dispatch(c *client, req request, now time.Time) time.Duration {
 		r := &room{id: randomID(16), code: hash, creator: c, expires: now.Add(s.cfg.Wait), hard: now.Add(s.cfg.Hard), eids: [2]string{randomID(8), randomID(8)},
 			region: c.region, platform: c.platform, version: c.version}
 		mustRandom(r.session[:])
+		mustRandom(r.claim[:])
 		s.rooms[r.id] = r
 		s.codes[hash] = r
 		c.room = r
 		s.metrics.created.Add(1)
 		s.record(c, evRoomCreated, 0, now)
-		respond(c, req, message{"t": "room_created", "room": r.id, "code": code, "expiresAt": r.expires.Unix(), "iceServers": s.iceServers(c)})
+		respond(c, req, message{"t": "room_created", "room": r.id, "code": code, "expiresAt": r.expires.Unix(), "iceServers": s.iceServers(c),
+			"claim": base64.RawURLEncoding.EncodeToString(r.claim[:])})
+	case "claim_room":
+		s.claimRoom(c, req, now)
 	case "resume":
 		s.resume(c, req, now)
 	case "join_room":
@@ -627,7 +633,7 @@ func (s *Server) dispatch(c *client, req request, now time.Time) time.Duration {
 		}
 		code := strings.NewReplacer(" ", "", "-", "").Replace(req.Code)
 		r := s.codes[s.hash(code)]
-		if r == nil || r.creator == nil || r.paired {
+		if r == nil || r.paired {
 			code, delay := ip.fail(now)
 			prefixCode, prefixDelay := prefix.fail(now)
 			code = max(code, prefixCode)
@@ -652,7 +658,10 @@ func (s *Server) dispatch(c *client, req request, now time.Time) time.Duration {
 		delete(s.codes, r.code)
 		s.retired[r.code] = now.Add(s.cfg.Wait)
 		respond(c, req, message{"t": "room_joined", "room": r.id, "peerEphemeralId": r.eids[0], "iceServers": s.iceServers(c)})
-		r.creator.emit(message{"t": "peer_joined", "room": r.id, "peerEphemeralId": r.eids[1]}, false)
+		// A creator who is away (orphaned) hears of it when it claims the room back.
+		if r.creator != nil {
+			r.creator.emit(message{"t": "peer_joined", "room": r.id, "peerEphemeralId": r.eids[1]}, false)
+		}
 	case "signal", "ready", "bye":
 		r := c.room
 		if r == nil || r.id != req.Room {
@@ -724,6 +733,40 @@ func (s *Server) closeRoom(r *room, reason uint, now time.Time) {
 		}
 	}
 }
+
+// claimRoom (04 §2.3.4): the creator of a room whose connection dropped takes it
+// back over a new connection. The code and its wait are unchanged; a peer that
+// joined meanwhile is announced at once.
+func (s *Server) claimRoom(c *client, req request, now time.Time) {
+	if c.room != nil {
+		respond(c, req, failure(8001, 0))
+		return
+	}
+	claim, _ := base64.RawURLEncoding.DecodeString(req.Claim)
+	for _, r := range s.rooms {
+		// Negotiating with a creator still connected: not to be interrupted.
+		if (r.paired && r.creator != nil) || subtle.ConstantTimeCompare(r.claim[:], claim) != 1 {
+			continue
+		}
+		// Back before its old connection was seen to die (a frozen app holds the
+		// socket open): only the creator has the claim, so the new connection wins.
+		if old := r.creator; old != nil {
+			old.room = nil
+			old.stop()
+		}
+		r.creator = c
+		r.orphan = time.Time{}
+		c.room = r
+		s.record(c, evRoomClaimed, 0, now)
+		respond(c, req, message{"t": "room_claimed", "room": r.id, "expiresAt": r.expires.Unix()})
+		if r.joiner != nil {
+			c.emit(message{"t": "peer_joined", "room": r.id, "peerEphemeralId": r.eids[1]}, false)
+		}
+		return
+	}
+	respond(c, req, failure(8020, 0))
+}
+
 func (s *Server) disconnect(c *client, now time.Time) {
 	s.leaveSlot(c)
 	r := c.room
